@@ -15,15 +15,42 @@ def using_config(name, value):
         setattr(Config, name, old_value)
 
 class Variable:
-    def __init__(self, data):
+    __array_priority__ = 200
+    def __init__(self, data, name = None):
         if data is not None:
             if not isinstance(data, np.ndarray):
                 raise TypeError('{}은(는) 지원하지 않습니다.'.format(type(data)))
 
         self.data = data
+        self.name = name
         self.grad = None
         self.creator = None
         self.generation = 0
+    
+    def __len__(self):
+        return len(self.data)
+    
+    def __repr__(self):
+        if self.data is None:
+            return 'variable(None)'
+        p = str(self.data).replace('\n', '\n' + ' ' * 9)
+        return 'variable(' + p + ')'
+
+    @property
+    def shape(self):
+        return self.data.shape
+    
+    @property
+    def ndim(self):
+        return self.data.ndim
+    
+    @property
+    def size(self):
+        return self.data.size
+    
+    @property
+    def dtype(self):
+        return self.data.dtype
 
     def set_creator(self, func):
         self.creator = func
@@ -73,6 +100,7 @@ class Variable:
 
 class Function:
     def __call__(self, *inputs):
+        inputs = [as_variable(x) for x in inputs]
         xs = [x.data for x in inputs]
         ys = self.forward(*xs)
         if not isinstance(ys, tuple):
@@ -119,6 +147,54 @@ class Add(Function):
     def backward(self, gy):
         return gy, gy
     
+class Mul(Function):
+    def forward(self, x0, x1):
+        y = x0 * x1
+        return y
+    
+    def backward(self, gy):
+        x0, x1 = self.inputs[0].data , self.inputs[1].data
+        return gy * x1, gy * x0
+    
+class Neg(Function):
+    def forward(self, x):
+        return -x
+    
+    def backward(self, gy):
+        return -gy
+    
+class Sub(Function):
+    def forward(self, x0, x1):
+        y = x0 - x1
+        return y
+
+    def backward(self, gy):
+        return gy, -gy
+
+class Div(Function):
+    def forward(self, x0, x1):
+        y = x0 / x1
+        return y
+    def backward(self, gy):
+        x0, x1 = self.inputs[0].data, self.inputs[1].data
+        gx0 = gy / x1
+        gx1 = gy * (-x0 / x1 ** 2)
+        return gx0, gx1
+    
+class Pow(Function):
+    def __init__(self, c):
+        self.c = c
+    
+    def forward(self, x):
+        y = x ** self.c
+        return y
+    
+    def backward(self, gy):
+        x = self.inputs[0].data
+        c = self.c
+        gx = c * x ** (c-1) * gy
+        return gy
+
 def square(x):
     return Square()(x)
 
@@ -126,12 +202,44 @@ def exp(x):
     return Exp()(x)
 
 def add(x0, x1):
+    x1 = as_array(x1)
     return Add()(x0, x1)
+
+def sub(x0, x1):
+    x1 = as_array(x1)
+    return Sub()(x0, x1)
+
+def rsub(x0, x1):
+    x1 = as_array(x1)
+    return Sub()(x1, x0)
+
+def mul(x0, x1):
+    x1 = as_array(x1)
+    return Mul()(x0, x1)
+
+def div(x0, x1):
+    x1 = as_array(x1)
+    return Div()(x0, x1)
+
+def rdiv(x0, x1):
+    x1 = as_array(x1)
+    return Div()(x1, x0)
+
+def neg(x):
+    return Neg()(x)
+
+def pow(x,c):
+    return Pow(c)(x)
 
 def as_array(x):
     if np.isscalar(x):
         return np.array(x)
     return x
+
+def as_variable(obj):
+    if isinstance(obj, Variable):
+        return obj
+    return Variable(obj)
 
 def no_grad():
     return using_config('enable_backprop', False)
@@ -143,11 +251,23 @@ def numerical_diff(f, x, eps = 1e-4):
     y1 = f(x1)
     return (y1.data - y0.data)/(2*eps)
 
-if __name__ == "__main__": 
-    with no_grad():
-        x = Variable(np.array(2.0))
-        y = square(x)
+Variable.__add__ = add
+Variable.__radd__ = add
+Variable.__sub__ = sub
+Variable.__rsub__ = rsub
+Variable.__mul__ = mul
+Variable.__rmul__ = mul
+Variable.__truediv__ = div
+Variable.__rtruediv__ = rdiv
+Variable.__pow__ = pow
+Variable.__neg__ = neg
 
+
+if __name__ == "__main__":
+    x = Variable(np.array(2.0))
+    y = x ** 3
+    y.backward()
+    print(y, x.grad)
 #######Test_Code#######
 
 import unittest
